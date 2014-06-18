@@ -1,5 +1,8 @@
 from fabric.api import run
 from fabric.api import env
+from fabric.api import prompt
+from fabric.api import execute
+from fabric.api import sudo
 import boto.ec2
 import time
 
@@ -70,3 +73,52 @@ def list_aws_instances(verbose=False, state='all'):
     if verbose:
         import pprint
         pprint.pprint(env.instances)
+
+def select_instance(state='running'):
+    if env.get('active_instance', False):
+        return
+
+    list_aws_instances(state=state)
+
+    prompt_text = "Please select from the following instances:\n"
+    instance_template = " %(ct)d: %(state)s instance %(id)s\n"
+    for idx, instance in enumerate(env.instances):
+        ct = idx + 1
+        args = {'ct': ct}
+        args.update(instance)
+        prompt_text += instance_template % args
+    prompt_text += "Choose an instance: "
+
+    def validation(input):
+        choice = int(input)
+        if not choice in range(1, len(env.instances) + 1):
+            raise ValueError("%d is not a valid instance" % choice)
+        return choice
+
+    choice = prompt(prompt_text, validate=validation)
+    env.active_instance = env.instances[choice - 1]['instance']
+
+
+def run_command_on_selected_server(command):
+    select_instance()
+    select_hosts = [
+        'ubuntu@' + env.active_instance.public_dns_name
+    ]
+    execute(command, hosts=select_hosts)
+
+def stop_instance():
+    select_instance('running')
+    conn = boto.ec2.connect_to_region(env.aws_region)
+    conn.stop_instances(instance_ids=env.get('active_instance', False).id)
+
+def terminate_instance():
+    select_instance('stopped')
+    conn = boto.ec2.connect_to_region(env.aws_region)
+    conn.terminate_instances(instance_ids=env.get('active_instance', False).id)
+
+def _install_nginx():
+    sudo('apt-get install nginx')
+    sudo('/etc/init.d/nginx start')
+
+def install_nginx():
+    run_command_on_selected_server(_install_nginx)
